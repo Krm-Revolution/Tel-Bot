@@ -81,8 +81,8 @@ A feature-rich Telegram bot that combines Opera AI chat capabilities with a comp
 #### Option A: Using Git (Recommended)
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/telegram-casino-bot.git
-cd telegram-casino-bot
+git clone https://github.com/krm-Revolution/Tel-Bot.git
+cd Tel-Bot
 
 # Make script executable
 chmod +x telbot.sh
