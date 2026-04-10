@@ -39,31 +39,41 @@ check_dependencies() {
         pkg install python -y
     fi
     
-    if ! command -v pip3 &> /dev/null; then
-        print_error "pip3 not found. Installing..."
-        pkg install python-pip -y
-    fi
-    
     if ! command -v git &> /dev/null; then
         print_error "Git not found. Installing..."
         pkg install git -y
     fi
+    
+    print_success "Dependencies checked"
+}
+
+create_requirements_file() {
+    print_message "Creating requirements.txt..."
+    
+    cat > requirements.txt << 'EOF'
+aiohttp>=3.8.0
+python-telegram-bot>=20.0
+Pillow>=9.0.0
+requests>=2.28.0
+EOF
+    
+    print_success "requirements.txt created"
 }
 
 setup_python_packages() {
-    print_message "Installing required Python packages..."
+    print_message "Setting up Python packages..."
     
-    pip3 install --upgrade pip
+    print_info "Upgrading pip..."
+    pip install --upgrade pip --no-warn-script-location
     
-    pip3 install aiohttp
-    pip3 install python-telegram-bot
-    pip3 install asyncio
-    pip3 install pillow
-    pip3 install requests
+    print_info "Installing packages from requirements.txt..."
+    pip install -r requirements.txt --no-warn-script-location
+    
+    print_success "Python packages installed"
 }
 
 create_bot_script() {
-    print_message "Creating enhanced Telegram bot script with gambling features..."
+    print_message "Creating enhanced Telegram bot script..."
     
     cat > bot.py << 'EOF'
 import asyncio
@@ -497,7 +507,7 @@ class GamblingGames:
     async def slots(self, user_id: int, bet: int) -> Tuple[str, int, bool]:
         user = self.db.get_user(user_id)
         if user[4] < bet:
-            return "Insufficient balance!", 0, False
+            return "❌ Insufficient balance!", 0, False
         
         emojis = ["🍒", "🍋", "🍊", "🍇", "💎", "7️⃣"]
         result = [random.choice(emojis) for _ in range(3)]
@@ -530,11 +540,11 @@ class GamblingGames:
     
     async def dice(self, user_id: int, bet: int, guess: int) -> Tuple[str, int, bool]:
         if guess < 1 or guess > 6:
-            return "Guess must be between 1 and 6!", 0, False
+            return "❌ Guess must be between 1 and 6!", 0, False
         
         user = self.db.get_user(user_id)
         if user[4] < bet:
-            return "Insufficient balance!", 0, False
+            return "❌ Insufficient balance!", 0, False
         
         roll = random.randint(1, 6)
         
@@ -555,11 +565,11 @@ class GamblingGames:
     async def coinflip(self, user_id: int, bet: int, choice: str) -> Tuple[str, int, bool]:
         user = self.db.get_user(user_id)
         if user[4] < bet:
-            return "Insufficient balance!", 0, False
+            return "❌ Insufficient balance!", 0, False
         
         choice = choice.lower()
         if choice not in ['heads', 'tails', 'h', 't']:
-            return "Choose heads or tails!", 0, False
+            return "❌ Choose heads or tails!", 0, False
         
         result = random.choice(['heads', 'tails'])
         choice_full = 'heads' if choice in ['heads', 'h'] else 'tails'
@@ -581,7 +591,7 @@ class GamblingGames:
     async def roulette(self, user_id: int, bet: int, bet_type: str, bet_value: str) -> Tuple[str, int, bool]:
         user = self.db.get_user(user_id)
         if user[4] < bet:
-            return "Insufficient balance!", 0, False
+            return "❌ Insufficient balance!", 0, False
         
         number = random.randint(0, 36)
         color = 'red' if number in [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36] else 'black' if number != 0 else 'green'
@@ -620,7 +630,7 @@ class GamblingGames:
     async def jackpot_spin(self, user_id: int, bet: int) -> Tuple[str, int, bool]:
         user = self.db.get_user(user_id)
         if user[4] < bet:
-            return "Insufficient balance!", 0, False
+            return "❌ Insufficient balance!", 0, False
         
         jackpot = self.db.get_jackpot()
         self.db.update_jackpot(bet // 2)
@@ -643,14 +653,13 @@ class GamblingGames:
     async def crash(self, user_id: int, bet: int, auto_cashout: Optional[float] = None) -> Tuple[str, int, bool]:
         user = self.db.get_user(user_id)
         if user[4] < bet:
-            return "Insufficient balance!", 0, False
+            return "❌ Insufficient balance!", 0, False
         
-        multiplier = 1.0
         crash_point = random.expovariate(1/2) + 1
         
         if auto_cashout:
             if auto_cashout <= 1:
-                return "Auto cashout must be greater than 1.0x!", 0, False
+                return "❌ Auto cashout must be greater than 1.0x!", 0, False
             
             if crash_point >= auto_cashout:
                 win_amount = int(bet * auto_cashout)
@@ -666,7 +675,7 @@ class GamblingGames:
                 self.db.add_game_history(user_id, "crash", bet, "lose", 0)
                 return message, -bet, False
         
-        return f"📈 CRASH: Current multiplier 1.00x\nUse /cashout to collect your winnings!", 0, False
+        return f"📈 CRASH: Game started! Use /cashout to collect your winnings!", 0, False
 
 opera_api = OperaAriaAPI()
 db = Database()
@@ -737,7 +746,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Please provide a question!\nUsage: /ask [your question]")
+        await update.message.reply_text("❌ Please provide a question!\nUsage: /ask [your question]")
         return
     
     question = ' '.join(context.args)
@@ -755,16 +764,16 @@ async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def slots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not context.args:
-        await update.message.reply_text("Usage: /slots [bet_amount]")
+        await update.message.reply_text("❌ Usage: /slots [bet_amount]")
         return
     
     try:
         bet = int(context.args[0])
         if bet < 10:
-            await update.message.reply_text("Minimum bet is 10 coins!")
+            await update.message.reply_text("❌ Minimum bet is 10 coins!")
             return
         if bet > 10000:
-            await update.message.reply_text("Maximum bet is 10000 coins!")
+            await update.message.reply_text("❌ Maximum bet is 10000 coins!")
             return
         
         message, net_change, won = await gambling.slots(user_id, bet)
@@ -774,11 +783,11 @@ async def slots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(message, reply_markup=reply_markup)
     except ValueError:
-        await update.message.reply_text("Invalid bet amount!")
+        await update.message.reply_text("❌ Invalid bet amount!")
 
 async def dice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /dice [bet] [guess 1-6]")
+        await update.message.reply_text("❌ Usage: /dice [bet] [guess 1-6]")
         return
     
     try:
@@ -786,7 +795,7 @@ async def dice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         guess = int(context.args[1])
         
         if bet < 10:
-            await update.message.reply_text("Minimum bet is 10 coins!")
+            await update.message.reply_text("❌ Minimum bet is 10 coins!")
             return
         
         message, net_change, won = await gambling.dice(update.effective_user.id, bet, guess)
@@ -796,11 +805,11 @@ async def dice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(message, reply_markup=reply_markup)
     except ValueError:
-        await update.message.reply_text("Invalid bet or guess!")
+        await update.message.reply_text("❌ Invalid bet or guess!")
 
 async def coinflip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /coinflip [bet] [heads/tails]")
+        await update.message.reply_text("❌ Usage: /coinflip [bet] [heads/tails]")
         return
     
     try:
@@ -808,7 +817,7 @@ async def coinflip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         choice = context.args[1]
         
         if bet < 10:
-            await update.message.reply_text("Minimum bet is 10 coins!")
+            await update.message.reply_text("❌ Minimum bet is 10 coins!")
             return
         
         message, net_change, won = await gambling.coinflip(update.effective_user.id, bet, choice)
@@ -818,11 +827,11 @@ async def coinflip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(message, reply_markup=reply_markup)
     except ValueError:
-        await update.message.reply_text("Invalid bet amount!")
+        await update.message.reply_text("❌ Invalid bet amount!")
 
 async def roulette_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 3:
-        await update.message.reply_text("Usage: /roulette [bet] [number/color/evenodd] [value]\nExamples:\n/roulette 100 number 17\n/roulette 100 color red\n/roulette 100 evenodd even")
+        await update.message.reply_text("❌ Usage: /roulette [bet] [number/color/evenodd] [value]\nExamples:\n/roulette 100 number 17\n/roulette 100 color red\n/roulette 100 evenodd even")
         return
     
     try:
@@ -831,7 +840,7 @@ async def roulette_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bet_value = context.args[2].lower()
         
         if bet < 10:
-            await update.message.reply_text("Minimum bet is 10 coins!")
+            await update.message.reply_text("❌ Minimum bet is 10 coins!")
             return
         
         message, net_change, won = await gambling.roulette(update.effective_user.id, bet, bet_type, bet_value)
@@ -841,17 +850,17 @@ async def roulette_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(message, reply_markup=reply_markup)
     except ValueError:
-        await update.message.reply_text("Invalid bet amount!")
+        await update.message.reply_text("❌ Invalid bet amount!")
 
 async def jackpot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: /jackpot [bet]")
+        await update.message.reply_text("❌ Usage: /jackpot [bet]")
         return
     
     try:
         bet = int(context.args[0])
         if bet < 50:
-            await update.message.reply_text("Minimum bet for jackpot is 50 coins!")
+            await update.message.reply_text("❌ Minimum bet for jackpot is 50 coins!")
             return
         
         jackpot_amount = db.get_jackpot()
@@ -864,13 +873,13 @@ async def jackpot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(message)
     except ValueError:
-        await update.message.reply_text("Invalid bet amount!")
+        await update.message.reply_text("❌ Invalid bet amount!")
 
 async def crash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if not context.args:
-        await update.message.reply_text("Usage: /crash [bet] [auto_cashout]\nExample: /crash 100 2.5")
+        await update.message.reply_text("❌ Usage: /crash [bet] [auto_cashout]\nExample: /crash 100 2.5")
         return
     
     try:
@@ -878,11 +887,11 @@ async def crash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auto_cashout = float(context.args[1]) if len(context.args) > 1 else None
         
         if bet < 10:
-            await update.message.reply_text("Minimum bet is 10 coins!")
+            await update.message.reply_text("❌ Minimum bet is 10 coins!")
             return
         
         if user_id in active_crash_games:
-            await update.message.reply_text("You already have an active crash game! Use /cashout to collect.")
+            await update.message.reply_text("❌ You already have an active crash game! Use /cashout to collect.")
             return
         
         message, net_change, won = await gambling.crash(user_id, bet, auto_cashout)
@@ -895,13 +904,13 @@ async def crash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(message)
     except ValueError:
-        await update.message.reply_text("Invalid bet or cashout multiplier!")
+        await update.message.reply_text("❌ Invalid bet or cashout multiplier!")
 
 async def cashout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if user_id not in active_crash_games:
-        await update.message.reply_text("No active crash game! Start one with /crash")
+        await update.message.reply_text("❌ No active crash game! Start one with /crash")
         return
     
     game_data = active_crash_games[user_id]
@@ -932,7 +941,7 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_user(user_id)
     
     if not user:
-        await update.message.reply_text("You're not registered! Use /start to register.")
+        await update.message.reply_text("❌ You're not registered! Use /start to register.")
         return
     
     stats = db.get_user_stats(user_id)
@@ -955,7 +964,7 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_user(user_id)
     
     if not user:
-        await update.message.reply_text("You're not registered! Use /start to register.")
+        await update.message.reply_text("❌ You're not registered! Use /start to register.")
         return
     
     if db.get_daily_bonus_available(user_id):
@@ -970,7 +979,7 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     top_users = db.get_top_users(10)
     
     if not top_users:
-        await update.message.reply_text("No users found!")
+        await update.message.reply_text("❌ No users found!")
         return
     
     message = "🏆 *TOP 10 PLAYERS* 🏆\n\n"
@@ -1087,7 +1096,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @admin_only
 async def give_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /give [user_id] [amount]")
+        await update.message.reply_text("❌ Usage: /give [user_id] [amount]")
         return
     
     try:
@@ -1095,36 +1104,36 @@ async def give_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = int(context.args[1])
         
         if not db.get_user(target_id):
-            await update.message.reply_text("User not found!")
+            await update.message.reply_text("❌ User not found!")
             return
         
         db.admin_give_coins(target_id, amount)
         await update.message.reply_text(f"✅ Gave {amount} coins to user {target_id}")
     except ValueError:
-        await update.message.reply_text("Invalid user ID or amount!")
+        await update.message.reply_text("❌ Invalid user ID or amount!")
 
 @admin_only
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: /reset [user_id]")
+        await update.message.reply_text("❌ Usage: /reset [user_id]")
         return
     
     try:
         target_id = int(context.args[0])
         
         if not db.get_user(target_id):
-            await update.message.reply_text("User not found!")
+            await update.message.reply_text("❌ User not found!")
             return
         
         db.admin_reset_user(target_id)
         await update.message.reply_text(f"✅ Reset user {target_id}'s stats to default")
     except ValueError:
-        await update.message.reply_text("Invalid user ID!")
+        await update.message.reply_text("❌ Invalid user ID!")
 
 @admin_only
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: /broadcast [message]")
+        await update.message.reply_text("❌ Usage: /broadcast [message]")
         return
     
     message = ' '.join(context.args)
@@ -1147,7 +1156,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @admin_only
 async def addcoins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: /addcoins [amount]")
+        await update.message.reply_text("❌ Usage: /addcoins [amount]")
         return
     
     try:
@@ -1159,7 +1168,7 @@ async def addcoins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(f"✅ Added {amount} coins to {len(users)} users!")
     except ValueError:
-        await update.message.reply_text("Invalid amount!")
+        await update.message.reply_text("❌ Invalid amount!")
 
 @admin_only
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1396,6 +1405,8 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n❌ Error: {e}")
 EOF
+    
+    print_success "Bot script created"
 }
 
 main() {
@@ -1407,17 +1418,21 @@ main() {
     echo "╚════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     
-    print_message "Starting comprehensive setup process..."
+    print_message "Starting setup process..."
     echo ""
     
     check_dependencies
     
     echo ""
-    print_message "Setting up Python environment..."
+    print_message "Creating requirements.txt..."
+    create_requirements_file
+    
+    echo ""
+    print_message "Installing Python packages..."
     setup_python_packages
     
     echo ""
-    print_message "Creating enhanced bot with full casino features..."
+    print_message "Creating bot script..."
     create_bot_script
     
     chmod +x bot.py
@@ -1427,42 +1442,12 @@ main() {
     echo ""
     
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}✨ FULL FEATURES LIST:${NC}"
-    echo ""
-    echo -e "${YELLOW}🎮 CASINO GAMES:${NC}"
-    echo "  • Slots Machine"
-    echo "  • Dice Game"
-    echo "  • Coin Flip"
-    echo "  • Roulette"
-    echo "  • Jackpot System"
-    echo "  • Crash Game"
-    echo ""
-    echo -e "${YELLOW}💰 ECONOMY SYSTEM:${NC}"
-    echo "  • Balance Management"
-    echo "  • Daily Bonuses (500 coins)"
-    echo "  • Win/Loss Tracking"
-    echo "  • Game History"
-    echo "  • Progressive Jackpot"
-    echo ""
-    echo -e "${YELLOW}🏆 RANKINGS & STATS:${NC}"
-    echo "  • Top Players Leaderboard"
-    echo "  • User Statistics"
-    echo "  • Total Users Count"
-    echo "  • Player Names Display"
-    echo ""
-    echo -e "${YELLOW}🤖 AI FEATURES:${NC}"
-    echo "  • Opera Aria Chat"
-    echo "  • Image Analysis"
-    echo "  • Conversation Memory"
-    echo "  • Auto Token Management"
-    echo ""
-    echo -e "${YELLOW}👑 ADMIN COMMANDS:${NC}"
-    echo "  • /give - Give coins to users"
-    echo "  • /reset - Reset user stats"
-    echo "  • /broadcast - Message all users"
-    echo "  • /addcoins - Give coins to everyone"
-    echo "  • /admin - Admin control panel"
-    echo ""
+    echo -e "${GREEN}✨ Setup Complete! Features:${NC}"
+    echo "  • AI Chat with Opera Aria"
+    echo "  • 6 Casino Games"
+    echo "  • Economy System"
+    echo "  • Rankings & Stats"
+    echo "  • Admin Controls"
     echo -e "${PURPLE}👑 Admin: @Totoong_bryl_john${NC}"
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
     echo ""
