@@ -78,6 +78,8 @@ import os
 import base64
 import logging
 import sqlite3
+import signal
+import sys
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from aiohttp import ClientSession, FormData
@@ -1139,10 +1141,9 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(user[0], f"📢 *BROADCAST*\n\n{message}", parse_mode=ParseMode.MARKDOWN)
             success += 1
+            await asyncio.sleep(0.05)
         except:
             failed += 1
-        
-        await asyncio.sleep(0.05)
     
     await update.message.reply_text(f"✅ Broadcast sent!\nSuccess: {success}\nFailed: {failed}")
 
@@ -1388,15 +1389,41 @@ async def main():
     
     print("✅ Bot is running! Press Ctrl+C to stop.\n")
     
-    await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        
+        stop_event = asyncio.Event()
+        
+        def signal_handler():
+            stop_event.set()
+        
+        loop = asyncio.get_running_loop()
+        loop.add_signal_handler(signal.SIGINT, signal_handler)
+        loop.add_signal_handler(signal.SIGTERM, signal_handler)
+        
+        await stop_event.wait()
+        
+    except Exception as e:
+        logger.error(f"Error running bot: {e}")
+    finally:
+        print("\n🛑 Shutting down bot...")
+        try:
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
+        except:
+            pass
+        print("👋 Bot stopped successfully!")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n\n👋 Bot stopped.")
+        print("\n\n👋 Bot stopped by user.")
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\n❌ Fatal error: {e}")
 EOF
     
     print_success "Bot script created"
