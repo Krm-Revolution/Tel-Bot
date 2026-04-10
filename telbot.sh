@@ -60,18 +60,6 @@ EOF
     print_success "requirements.txt created"
 }
 
-setup_python_packages() {
-    print_message "Setting up Python packages..."
-    
-    print_info "Upgrading pip..."
-    pip install --upgrade pip --no-warn-script-location
-    
-    print_info "Installing packages from requirements.txt..."
-    pip install -r requirements.txt --no-warn-script-location
-    
-    print_success "Python packages installed"
-}
-
 create_bot_script() {
     print_message "Creating enhanced Telegram bot script..."
     
