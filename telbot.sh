@@ -83,26 +83,28 @@ import sys
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from aiohttp import ClientSession, FormData
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.constants import ParseMode
+from telegram.error import BadRequest, TimedOut, NetworkError
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 
-ADMIN_USERNAME = "Totoong_bryl_john"
-ADMIN_IDS = set()
+ADMIN_USERNAME: str = "Totoong_bryl_john"
+ADMIN_IDS: set = set()
 
 class Database:
-    def __init__(self):
+    def __init__(self) -> None:
         self.conn = sqlite3.connect('bot_database.db', check_same_thread=False)
         self.cursor = self.conn.cursor()
         self.init_database()
     
-    def init_database(self):
+    def init_database(self) -> None:
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -114,7 +116,6 @@ class Database:
                 total_lost INTEGER DEFAULT 0,
                 games_played INTEGER DEFAULT 0,
                 last_daily TIMESTAMP,
-                last_weekly TIMESTAMP,
                 join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -148,25 +149,25 @@ class Database:
         self.cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         return self.cursor.fetchone()
     
-    def create_user(self, user_id: int, username: str, first_name: str, last_name: str):
+    def create_user(self, user_id: int, username: str, first_name: str, last_name: str) -> None:
         self.cursor.execute('''
             INSERT INTO users (user_id, username, first_name, last_name, balance, join_date)
             VALUES (?, ?, ?, ?, 1000, CURRENT_TIMESTAMP)
         ''', (user_id, username, first_name, last_name))
         self.conn.commit()
     
-    def update_balance(self, user_id: int, amount: int):
+    def update_balance(self, user_id: int, amount: int) -> None:
         self.cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
         self.conn.commit()
     
-    def update_stats(self, user_id: int, won: bool, bet: int, win_amount: int):
+    def update_stats(self, user_id: int, won: bool, bet: int, win_amount: int) -> None:
         if won:
             self.cursor.execute("UPDATE users SET total_won = total_won + ?, games_played = games_played + 1 WHERE user_id = ?", (win_amount, user_id))
         else:
             self.cursor.execute("UPDATE users SET total_lost = total_lost + ?, games_played = games_played + 1 WHERE user_id = ?", (bet, user_id))
         self.conn.commit()
     
-    def add_game_history(self, user_id: int, game_type: str, bet: int, result: str, win_amount: int):
+    def add_game_history(self, user_id: int, game_type: str, bet: int, result: str, win_amount: int) -> None:
         self.cursor.execute('''
             INSERT INTO game_history (user_id, game_type, bet_amount, result, win_amount)
             VALUES (?, ?, ?, ?, ?)
@@ -190,11 +191,11 @@ class Database:
         self.cursor.execute("SELECT amount FROM jackpot WHERE id = 1")
         return self.cursor.fetchone()[0]
     
-    def update_jackpot(self, amount: int):
+    def update_jackpot(self, amount: int) -> None:
         self.cursor.execute("UPDATE jackpot SET amount = amount + ? WHERE id = 1", (amount,))
         self.conn.commit()
     
-    def reset_jackpot(self):
+    def reset_jackpot(self) -> None:
         self.cursor.execute("UPDATE jackpot SET amount = 10000 WHERE id = 1")
         self.conn.commit()
     
@@ -203,14 +204,17 @@ class Database:
         result = self.cursor.fetchone()
         if not result or not result[0]:
             return True
-        last_daily = datetime.fromisoformat(result[0])
+        try:
+            last_daily = datetime.fromisoformat(result[0].replace('Z', '+00:00'))
+        except:
+            last_daily = datetime.now()
         return datetime.now() - last_daily > timedelta(hours=24)
     
-    def claim_daily(self, user_id: int):
+    def claim_daily(self, user_id: int) -> None:
         self.cursor.execute("UPDATE users SET last_daily = CURRENT_TIMESTAMP WHERE user_id = ?", (user_id,))
         self.conn.commit()
     
-    def get_user_stats(self, user_id: int) -> Optional[Dict]:
+    def get_user_stats(self, user_id: int) -> Optional[Dict[str, Any]]:
         self.cursor.execute('''
             SELECT balance, total_won, total_lost, games_played, join_date
             FROM users WHERE user_id = ?
@@ -226,11 +230,11 @@ class Database:
             }
         return None
     
-    def admin_give_coins(self, user_id: int, amount: int):
+    def admin_give_coins(self, user_id: int, amount: int) -> None:
         self.cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
         self.conn.commit()
     
-    def admin_reset_user(self, user_id: int):
+    def admin_reset_user(self, user_id: int) -> None:
         self.cursor.execute("UPDATE users SET balance = 1000, total_won = 0, total_lost = 0, games_played = 0 WHERE user_id = ?", (user_id,))
         self.conn.commit()
     
@@ -239,19 +243,19 @@ class Database:
         return self.cursor.fetchall()
 
 class OperaAriaConversation:
-    def __init__(self, refresh_token: str = None):
-        self.access_token: str = None
-        self.refresh_token: str = refresh_token
+    def __init__(self, refresh_token: Optional[str] = None) -> None:
+        self.access_token: Optional[str] = None
+        self.refresh_token: Optional[str] = refresh_token
         self.encryption_key: str = self._generate_encryption_key()
         self.expires_at: float = 0
-        self.conversation_id: str = None
+        self.conversation_id: Optional[str] = None
         self.is_first_request: bool = True
-        self.message_history: List[Dict] = []
+        self.message_history: List[Dict[str, str]] = []
     
     def is_token_expired(self) -> bool:
         return time.time() >= self.expires_at
     
-    def update_token(self, access_token: str, expires_in: int):
+    def update_token(self, access_token: str, expires_in: int) -> None:
         self.access_token = access_token
         self.expires_at = time.time() + expires_in - 60
     
@@ -260,35 +264,24 @@ class OperaAriaConversation:
         random_bytes = os.urandom(32)
         return base64.b64encode(random_bytes).decode('utf-8')
     
-    @staticmethod
-    def generate_conversation_id() -> str:
-        parts = [
-            ''.join(random.choices('0123456789abcdef', k=8)),
-            ''.join(random.choices('0123456789abcdef', k=4)),
-            '11f0',
-            ''.join(random.choices('0123456789abcdef', k=4)),
-            ''.join(random.choices('0123456789abcdef', k=12))
-        ]
-        return '-'.join(parts)
-    
-    def add_message(self, role: str, content: str):
+    def add_message(self, role: str, content: str) -> None:
         self.message_history.append({"role": role, "content": content})
         if len(self.message_history) > 20:
             self.message_history = self.message_history[-20:]
     
-    def clear_history(self):
+    def clear_history(self) -> None:
         self.message_history = []
         self.is_first_request = True
         self.conversation_id = None
 
 class OperaAriaAPI:
-    api_endpoint = "https://composer.opera-api.com/api/v1/a-chat"
-    token_endpoint = "https://oauth2.opera-api.com/oauth2/v1/token/"
-    signup_endpoint = "https://auth.opera.com/account/v2/external/anonymous/signup"
-    upload_endpoint = "https://composer.opera-api.com/api/v1/images/upload"
-    check_status_endpoint = "https://composer.opera-api.com/api/v1/images/check-status/"
+    api_endpoint: str = "https://composer.opera-api.com/api/v1/a-chat"
+    token_endpoint: str = "https://oauth2.opera-api.com/oauth2/v1/token/"
+    signup_endpoint: str = "https://auth.opera.com/account/v2/external/anonymous/signup"
+    upload_endpoint: str = "https://composer.opera-api.com/api/v1/images/upload"
+    check_status_endpoint: str = "https://composer.opera-api.com/api/v1/images/check-status/"
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.user_conversations: Dict[int, OperaAriaConversation] = {}
     
     def get_or_create_conversation(self, user_id: int) -> OperaAriaConversation:
@@ -366,7 +359,7 @@ class OperaAriaAPI:
             )
             return result["access_token"]
     
-    async def check_upload_status(self, session: ClientSession, access_token: str, image_id: str, max_attempts: int = 30):
+    async def check_upload_status(self, session: ClientSession, access_token: str, image_id: str, max_attempts: int = 30) -> None:
         headers = {
             "Authorization": f"Bearer {access_token}",
             "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Mobile Safari/537.36 OPR/89.0.0.0",
@@ -410,7 +403,7 @@ class OperaAriaAPI:
         urls = re.findall(pattern, text)
         return [url.replace(r'\/', '/') for url in urls]
     
-    async def send_message(self, user_id: int, message: str, image_data: Optional[bytes] = None) -> str:
+    async def send_message(self, user_id: int, message: str, image_data: Optional[bytes] = None) -> Tuple[str, List[str]]:
         conversation = self.get_or_create_conversation(user_id)
         
         async with ClientSession() as session:
@@ -460,6 +453,7 @@ class OperaAriaAPI:
                 data["conversation_id"] = conversation.conversation_id
             
             full_response = ""
+            all_image_urls = []
             
             async with session.post(self.api_endpoint, headers=headers, json=data) as response:
                 response.raise_for_status()
@@ -480,7 +474,9 @@ class OperaAriaAPI:
                         if 'message' in json_data:
                             message_chunk = json_data['message']
                             image_urls = self.extract_image_urls(message_chunk)
-                            if not image_urls:
+                            if image_urls:
+                                all_image_urls.extend(image_urls)
+                            else:
                                 full_response += message_chunk
                         
                         if 'conversation_id' in json_data and json_data['conversation_id']:
@@ -493,16 +489,16 @@ class OperaAriaAPI:
             conversation.add_message("user", message)
             conversation.add_message("assistant", full_response)
             
-            return full_response
+            return full_response, all_image_urls
 
 class GamblingGames:
-    def __init__(self, db: Database):
+    def __init__(self, db: Database) -> None:
         self.db = db
     
     async def slots(self, user_id: int, bet: int) -> Tuple[str, int, bool]:
         user = self.db.get_user(user_id)
         if user[4] < bet:
-            return "Insufficient balance!", 0, False
+            return "❌ Insufficient balance!", 0, False
         
         emojis = ["🍒", "🍋", "🍊", "🍇", "💎", "7️⃣"]
         result = [random.choice(emojis) for _ in range(3)]
@@ -518,7 +514,7 @@ class GamblingGames:
         elif result[0] == result[1] or result[1] == result[2] or result[0] == result[2]:
             win_amount = bet * 2
         
-        message = f"🎰 Slots Result:\n{' '.join(result)}\n"
+        message = f"🎰 *Slots Result:*\n`{' '.join(result)}`\n"
         
         if win_amount > 0:
             message += f"🎉 You won {win_amount} coins!"
@@ -535,23 +531,23 @@ class GamblingGames:
     
     async def dice(self, user_id: int, bet: int, guess: int) -> Tuple[str, int, bool]:
         if guess < 1 or guess > 6:
-            return "Guess must be between 1 and 6!", 0, False
+            return "❌ Guess must be between 1 and 6!", 0, False
         
         user = self.db.get_user(user_id)
         if user[4] < bet:
-            return "Insufficient balance!", 0, False
+            return "❌ Insufficient balance!", 0, False
         
         roll = random.randint(1, 6)
         
         if roll == guess:
             win_amount = bet * 6
-            message = f"🎲 Dice rolled: {roll}\n🎉 Perfect guess! You won {win_amount} coins!"
+            message = f"🎲 *Dice rolled:* {roll}\n🎉 Perfect guess! You won {win_amount} coins!"
             self.db.update_balance(user_id, win_amount - bet)
             self.db.update_stats(user_id, True, bet, win_amount)
             self.db.add_game_history(user_id, "dice", bet, "win", win_amount)
             return message, win_amount - bet, True
         else:
-            message = f"🎲 Dice rolled: {roll}\n😢 Wrong guess! You lost {bet} coins!"
+            message = f"🎲 *Dice rolled:* {roll}\n😢 Wrong guess! You lost {bet} coins!"
             self.db.update_balance(user_id, -bet)
             self.db.update_stats(user_id, False, bet, 0)
             self.db.add_game_history(user_id, "dice", bet, "lose", 0)
@@ -560,24 +556,24 @@ class GamblingGames:
     async def coinflip(self, user_id: int, bet: int, choice: str) -> Tuple[str, int, bool]:
         user = self.db.get_user(user_id)
         if user[4] < bet:
-            return "Insufficient balance!", 0, False
+            return "❌ Insufficient balance!", 0, False
         
         choice = choice.lower()
         if choice not in ['heads', 'tails', 'h', 't']:
-            return "Choose heads or tails!", 0, False
+            return "❌ Choose heads or tails!", 0, False
         
         result = random.choice(['heads', 'tails'])
         choice_full = 'heads' if choice in ['heads', 'h'] else 'tails'
         
         if choice_full == result:
             win_amount = bet * 2
-            message = f"🪙 Coin flip: {result.upper()}!\n🎉 You won {win_amount} coins!"
+            message = f"🪙 *Coin flip:* {result.upper()}!\n🎉 You won {win_amount} coins!"
             self.db.update_balance(user_id, win_amount - bet)
             self.db.update_stats(user_id, True, bet, win_amount)
             self.db.add_game_history(user_id, "coinflip", bet, "win", win_amount)
             return message, win_amount - bet, True
         else:
-            message = f"🪙 Coin flip: {result.upper()}!\n😢 You lost {bet} coins!"
+            message = f"🪙 *Coin flip:* {result.upper()}!\n😢 You lost {bet} coins!"
             self.db.update_balance(user_id, -bet)
             self.db.update_stats(user_id, False, bet, 0)
             self.db.add_game_history(user_id, "coinflip", bet, "lose", 0)
@@ -586,7 +582,7 @@ class GamblingGames:
     async def roulette(self, user_id: int, bet: int, bet_type: str, bet_value: str) -> Tuple[str, int, bool]:
         user = self.db.get_user(user_id)
         if user[4] < bet:
-            return "Insufficient balance!", 0, False
+            return "❌ Insufficient balance!", 0, False
         
         number = random.randint(0, 36)
         color = 'red' if number in [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36] else 'black' if number != 0 else 'green'
@@ -610,13 +606,13 @@ class GamblingGames:
         
         if win:
             win_amount = bet * multiplier
-            message = f"🎡 Roulette: {number} {color.upper()}\n🎉 You won {win_amount} coins!"
+            message = f"🎡 *Roulette:* {number} {color.upper()}\n🎉 You won {win_amount} coins!"
             self.db.update_balance(user_id, win_amount - bet)
             self.db.update_stats(user_id, True, bet, win_amount)
             self.db.add_game_history(user_id, "roulette", bet, "win", win_amount)
             return message, win_amount - bet, True
         else:
-            message = f"🎡 Roulette: {number} {color.upper()}\n😢 You lost {bet} coins!"
+            message = f"🎡 *Roulette:* {number} {color.upper()}\n😢 You lost {bet} coins!"
             self.db.update_balance(user_id, -bet)
             self.db.update_stats(user_id, False, bet, 0)
             self.db.add_game_history(user_id, "roulette", bet, "lose", 0)
@@ -625,21 +621,21 @@ class GamblingGames:
     async def jackpot_spin(self, user_id: int, bet: int) -> Tuple[str, int, bool]:
         user = self.db.get_user(user_id)
         if user[4] < bet:
-            return "Insufficient balance!", 0, False
+            return "❌ Insufficient balance!", 0, False
         
         jackpot = self.db.get_jackpot()
         self.db.update_jackpot(bet // 2)
         
         if random.random() < 0.001:
             win_amount = jackpot
-            message = f"🎰🎰🎰 JACKPOT!!! 🎰🎰🎰\n💎 You won {win_amount} coins! 💎"
+            message = f"🎰🎰🎰 *JACKPOT!!!* 🎰🎰🎰\n💎 You won {win_amount} coins! 💎"
             self.db.update_balance(user_id, win_amount - bet)
             self.db.update_stats(user_id, True, bet, win_amount)
             self.db.add_game_history(user_id, "jackpot", bet, "win", win_amount)
             self.db.reset_jackpot()
             return message, win_amount - bet, True
         else:
-            message = f"🎰 Jackpot spin... No luck this time! Lost {bet} coins.\n💰 Current jackpot: {jackpot + bet//2} coins"
+            message = f"🎰 *Jackpot spin...* No luck this time! Lost {bet} coins.\n💰 Current jackpot: {jackpot + bet//2} coins"
             self.db.update_balance(user_id, -bet)
             self.db.update_stats(user_id, False, bet, 0)
             self.db.add_game_history(user_id, "jackpot", bet, "lose", 0)
@@ -648,36 +644,48 @@ class GamblingGames:
     async def crash(self, user_id: int, bet: int, auto_cashout: Optional[float] = None) -> Tuple[str, int, bool]:
         user = self.db.get_user(user_id)
         if user[4] < bet:
-            return "Insufficient balance!", 0, False
+            return "❌ Insufficient balance!", 0, False
         
         crash_point = random.expovariate(1/2) + 1
         
         if auto_cashout:
             if auto_cashout <= 1:
-                return "Auto cashout must be greater than 1.0x!", 0, False
+                return "❌ Auto cashout must be greater than 1.0x!", 0, False
             
             if crash_point >= auto_cashout:
                 win_amount = int(bet * auto_cashout)
-                message = f"📈 CRASH: Crashed at {crash_point:.2f}x\n✅ Auto-cashed out at {auto_cashout:.2f}x!\n🎉 You won {win_amount} coins!"
+                message = f"📈 *CRASH:* Crashed at {crash_point:.2f}x\n✅ Auto-cashed out at {auto_cashout:.2f}x!\n🎉 You won {win_amount} coins!"
                 self.db.update_balance(user_id, win_amount - bet)
                 self.db.update_stats(user_id, True, bet, win_amount)
                 self.db.add_game_history(user_id, "crash", bet, "win", win_amount)
                 return message, win_amount - bet, True
             else:
-                message = f"📈 CRASH: Crashed at {crash_point:.2f}x\n💥 Crashed before your auto-cashout at {auto_cashout:.2f}x!\n😢 You lost {bet} coins!"
+                message = f"📈 *CRASH:* Crashed at {crash_point:.2f}x\n💥 Crashed before your auto-cashout at {auto_cashout:.2f}x!\n😢 You lost {bet} coins!"
                 self.db.update_balance(user_id, -bet)
                 self.db.update_stats(user_id, False, bet, 0)
                 self.db.add_game_history(user_id, "crash", bet, "lose", 0)
                 return message, -bet, False
         
-        return f"📈 CRASH: Game started! Use /cashout to collect your winnings!", 0, False
+        return f"📈 *CRASH:* Game started! Use /cashout to collect your winnings!", 0, False
 
 opera_api = OperaAriaAPI()
 db = Database()
 gambling = GamblingGames(db)
-active_crash_games = {}
+active_crash_games: Dict[int, Dict[str, Any]] = {}
 
-async def check_admin(user_id: int, username: str) -> bool:
+def get_main_keyboard() -> ReplyKeyboardMarkup:
+    keyboard = [
+        [KeyboardButton("🎰 Slots"), KeyboardButton("🎲 Dice")],
+        [KeyboardButton("🪙 Coin Flip"), KeyboardButton("🎡 Roulette")],
+        [KeyboardButton("💰 Balance"), KeyboardButton("🏆 Top Players")],
+        [KeyboardButton("🤖 AI Chat"), KeyboardButton("❓ Help")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error(f"Exception while handling an update: {context.error}")
+
+async def check_admin(user_id: int, username: Optional[str]) -> bool:
     if username and username.lower() == ADMIN_USERNAME.lower():
         ADMIN_IDS.add(user_id)
         return True
@@ -693,7 +701,13 @@ def admin_only(func):
         return await func(update, context)
     return wrapper
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def safe_callback_answer(query) -> None:
+    try:
+        await query.answer()
+    except (BadRequest, TimedOut, NetworkError):
+        pass
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not db.get_user(user.id):
         db.create_user(user.id, user.username or "Unknown", user.first_name or "", user.last_name or "")
@@ -702,7 +716,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎮 *WELCOME TO OPERA AI CASINO BOT* 🎮\n\n"
         "🤖 *AI Commands:*\n"
         "/ask - Chat with Opera AI\n"
-        "/image - Send image for AI analysis\n"
         "/new - Start new conversation\n"
         "/history - View chat history\n\n"
         "🎰 *Casino Games:*\n"
@@ -716,59 +729,54 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/balance - Check your balance\n"
         "/daily - Claim daily bonus (500 coins)\n"
         "/top - View top players\n"
-        "/stats - View your statistics\n"
-        "/users - Total users count\n\n"
-        "👑 *Admin Commands:*\n"
-        "/give [user_id] [amount] - Give coins to user\n"
-        "/reset [user_id] - Reset user stats\n"
-        "/broadcast [message] - Broadcast message\n"
-        "/addcoins [amount] - Add coins to all users\n\n"
+        "/stats - View your statistics\n\n"
         "🎲 *Start with 1000 coins! Good luck!* 🍀"
     )
     
-    keyboard = [
-        [InlineKeyboardButton("🎰 Slots", callback_data='game_slots'),
-         InlineKeyboardButton("🎲 Dice", callback_data='game_dice')],
-        [InlineKeyboardButton("🪙 Coin Flip", callback_data='game_coinflip'),
-         InlineKeyboardButton("🎡 Roulette", callback_data='game_roulette')],
-        [InlineKeyboardButton("💰 Balance", callback_data='check_balance'),
-         InlineKeyboardButton("🏆 Top Players", callback_data='top_players')],
-        [InlineKeyboardButton("💬 Chat with AI", callback_data='chat_ai')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(welcome_message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+    await update.message.reply_text(
+        welcome_message, 
+        parse_mode=ParseMode.MARKDOWN, 
+        reply_markup=get_main_keyboard()
+    )
 
-async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ask_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.message.reply_text("Please provide a question!\nUsage: /ask [your question]")
+        await update.message.reply_text("❌ Please provide a question!\nUsage: /ask [your question]")
         return
     
     question = ' '.join(context.args)
     processing_msg = await update.message.reply_text("🤔 *AI is thinking...*", parse_mode=ParseMode.MARKDOWN)
     
     try:
-        response = await opera_api.send_message(update.effective_user.id, question)
+        response, image_urls = await opera_api.send_message(update.effective_user.id, question)
+        
+        if image_urls:
+            for url in image_urls[:5]:
+                try:
+                    await update.message.reply_photo(url)
+                except:
+                    pass
+        
         if response:
             await processing_msg.edit_text(f"🤖 *AI Response:*\n\n{response}", parse_mode=ParseMode.MARKDOWN)
         else:
-            await processing_msg.edit_text("No response received. Please try again.")
+            await processing_msg.edit_text("❌ No response received. Please try again.")
     except Exception as e:
-        await processing_msg.edit_text(f"Error: {str(e)[:100]}")
+        await processing_msg.edit_text(f"❌ Error: {str(e)[:100]}")
 
-async def slots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def slots_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if not context.args:
-        await update.message.reply_text("Usage: /slots [bet_amount]")
+        await update.message.reply_text("❌ Usage: /slots [bet_amount]")
         return
     
     try:
         bet = int(context.args[0])
         if bet < 10:
-            await update.message.reply_text("Minimum bet is 10 coins!")
+            await update.message.reply_text("❌ Minimum bet is 10 coins!")
             return
         if bet > 10000:
-            await update.message.reply_text("Maximum bet is 10000 coins!")
+            await update.message.reply_text("❌ Maximum bet is 10000 coins!")
             return
         
         message, net_change, won = await gambling.slots(user_id, bet)
@@ -776,13 +784,13 @@ async def slots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🎰 Play Again", callback_data=f'slots_{bet}')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(message, reply_markup=reply_markup)
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     except ValueError:
-        await update.message.reply_text("Invalid bet amount!")
+        await update.message.reply_text("❌ Invalid bet amount!")
 
-async def dice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def dice_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /dice [bet] [guess 1-6]")
+        await update.message.reply_text("❌ Usage: /dice [bet] [guess 1-6]")
         return
     
     try:
@@ -790,7 +798,7 @@ async def dice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         guess = int(context.args[1])
         
         if bet < 10:
-            await update.message.reply_text("Minimum bet is 10 coins!")
+            await update.message.reply_text("❌ Minimum bet is 10 coins!")
             return
         
         message, net_change, won = await gambling.dice(update.effective_user.id, bet, guess)
@@ -798,13 +806,13 @@ async def dice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🎲 Roll Again", callback_data=f'dice_{bet}')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(message, reply_markup=reply_markup)
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     except ValueError:
-        await update.message.reply_text("Invalid bet or guess!")
+        await update.message.reply_text("❌ Invalid bet or guess!")
 
-async def coinflip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def coinflip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /coinflip [bet] [heads/tails]")
+        await update.message.reply_text("❌ Usage: /coinflip [bet] [heads/tails]")
         return
     
     try:
@@ -812,7 +820,7 @@ async def coinflip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         choice = context.args[1]
         
         if bet < 10:
-            await update.message.reply_text("Minimum bet is 10 coins!")
+            await update.message.reply_text("❌ Minimum bet is 10 coins!")
             return
         
         message, net_change, won = await gambling.coinflip(update.effective_user.id, bet, choice)
@@ -820,13 +828,13 @@ async def coinflip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🪙 Flip Again", callback_data=f'coinflip_{bet}')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(message, reply_markup=reply_markup)
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     except ValueError:
-        await update.message.reply_text("Invalid bet amount!")
+        await update.message.reply_text("❌ Invalid bet amount!")
 
-async def roulette_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def roulette_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) < 3:
-        await update.message.reply_text("Usage: /roulette [bet] [number/color/evenodd] [value]\nExamples:\n/roulette 100 number 17\n/roulette 100 color red\n/roulette 100 evenodd even")
+        await update.message.reply_text("❌ Usage: /roulette [bet] [number/color/evenodd] [value]")
         return
     
     try:
@@ -835,7 +843,7 @@ async def roulette_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bet_value = context.args[2].lower()
         
         if bet < 10:
-            await update.message.reply_text("Minimum bet is 10 coins!")
+            await update.message.reply_text("❌ Minimum bet is 10 coins!")
             return
         
         message, net_change, won = await gambling.roulette(update.effective_user.id, bet, bet_type, bet_value)
@@ -843,19 +851,19 @@ async def roulette_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🎡 Spin Again", callback_data=f'roulette_{bet}')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(message, reply_markup=reply_markup)
+        await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     except ValueError:
-        await update.message.reply_text("Invalid bet amount!")
+        await update.message.reply_text("❌ Invalid bet amount!")
 
-async def jackpot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def jackpot_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.message.reply_text("Usage: /jackpot [bet]")
+        await update.message.reply_text("❌ Usage: /jackpot [bet]")
         return
     
     try:
         bet = int(context.args[0])
         if bet < 50:
-            await update.message.reply_text("Minimum bet for jackpot is 50 coins!")
+            await update.message.reply_text("❌ Minimum bet for jackpot is 50 coins!")
             return
         
         jackpot_amount = db.get_jackpot()
@@ -864,17 +872,17 @@ async def jackpot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not won:
             keyboard = [[InlineKeyboardButton("🎰 Spin for Jackpot!", callback_data=f'jackpot_{bet}')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(message, reply_markup=reply_markup)
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
         else:
-            await update.message.reply_text(message)
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
     except ValueError:
-        await update.message.reply_text("Invalid bet amount!")
+        await update.message.reply_text("❌ Invalid bet amount!")
 
-async def crash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def crash_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     
     if not context.args:
-        await update.message.reply_text("Usage: /crash [bet] [auto_cashout]\nExample: /crash 100 2.5")
+        await update.message.reply_text("❌ Usage: /crash [bet] [auto_cashout]")
         return
     
     try:
@@ -882,11 +890,11 @@ async def crash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         auto_cashout = float(context.args[1]) if len(context.args) > 1 else None
         
         if bet < 10:
-            await update.message.reply_text("Minimum bet is 10 coins!")
+            await update.message.reply_text("❌ Minimum bet is 10 coins!")
             return
         
         if user_id in active_crash_games:
-            await update.message.reply_text("You already have an active crash game! Use /cashout to collect.")
+            await update.message.reply_text("❌ You already have an active crash game! Use /cashout to collect.")
             return
         
         message, net_change, won = await gambling.crash(user_id, bet, auto_cashout)
@@ -895,17 +903,17 @@ async def crash_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             active_crash_games[user_id] = {"bet": bet, "start_time": time.time()}
             keyboard = [[InlineKeyboardButton("💰 CASHOUT NOW!", callback_data='crash_cashout')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(message, reply_markup=reply_markup)
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
         else:
-            await update.message.reply_text(message)
+            await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
     except ValueError:
-        await update.message.reply_text("Invalid bet or cashout multiplier!")
+        await update.message.reply_text("❌ Invalid bet or cashout multiplier!")
 
-async def cashout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cashout_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     
     if user_id not in active_crash_games:
-        await update.message.reply_text("No active crash game! Start one with /crash")
+        await update.message.reply_text("❌ No active crash game! Start one with /crash")
         return
     
     game_data = active_crash_games[user_id]
@@ -920,23 +928,23 @@ async def cashout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.update_stats(user_id, True, game_data["bet"], win_amount)
         db.add_game_history(user_id, "crash", game_data["bet"], "win", win_amount)
         
-        message = f"📈 CRASH: Crashed at {crash_point:.2f}x\n✅ Cashed out at {multiplier:.2f}x!\n🎉 You won {win_amount} coins!"
+        message = f"📈 *CRASH:* Crashed at {crash_point:.2f}x\n✅ Cashed out at {multiplier:.2f}x!\n🎉 You won {win_amount} coins!"
     else:
         db.update_balance(user_id, -game_data["bet"])
         db.update_stats(user_id, False, game_data["bet"], 0)
         db.add_game_history(user_id, "crash", game_data["bet"], "lose", 0)
         
-        message = f"📈 CRASH: Crashed at {crash_point:.2f}x\n💥 Too late! You lost {game_data['bet']} coins!"
+        message = f"📈 *CRASH:* Crashed at {crash_point:.2f}x\n💥 Too late! You lost {game_data['bet']} coins!"
     
     del active_crash_games[user_id]
-    await update.message.reply_text(message)
+    await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
-async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user = db.get_user(user_id)
     
     if not user:
-        await update.message.reply_text("You're not registered! Use /start to register.")
+        await update.message.reply_text("❌ You're not registered! Use /start to register.")
         return
     
     stats = db.get_user_stats(user_id)
@@ -954,12 +962,12 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
-async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     user = db.get_user(user_id)
     
     if not user:
-        await update.message.reply_text("You're not registered! Use /start to register.")
+        await update.message.reply_text("❌ You're not registered! Use /start to register.")
         return
     
     if db.get_daily_bonus_available(user_id):
@@ -970,11 +978,11 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("⏰ You already claimed your daily bonus! Come back tomorrow.")
 
-async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     top_users = db.get_top_users(10)
     
     if not top_users:
-        await update.message.reply_text("No users found!")
+        await update.message.reply_text("❌ No users found!")
         return
     
     message = "🏆 *TOP 10 PLAYERS* 🏆\n\n"
@@ -988,7 +996,7 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     total_users = db.get_total_users()
     jackpot = db.get_jackpot()
     
@@ -1008,7 +1016,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
-async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     all_users = db.get_all_users()
     total_users = len(all_users)
     
@@ -1023,13 +1031,13 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
 
-async def new_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def new_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if user_id in opera_api.user_conversations:
         opera_api.user_conversations[user_id].clear_history()
     await update.message.reply_text("🆕 *New conversation started!*", parse_mode=ParseMode.MARKDOWN)
 
-async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     conversation = opera_api.get_or_create_conversation(user_id)
     
@@ -1045,25 +1053,59 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(history_text, parse_mode=ParseMode.MARKDOWN)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_message = update.message.text
-    
-    processing_msg = await update.message.reply_text("🤔 *Thinking...*", parse_mode=ParseMode.MARKDOWN)
-    
-    try:
-        response = await opera_api.send_message(user_id, user_message)
-        
-        if response:
-            await processing_msg.edit_text(response, parse_mode=ParseMode.MARKDOWN)
-        else:
-            await processing_msg.edit_text("No response received. Please try again.")
-    
-    except Exception as e:
-        logger.error(f"Error processing message: {e}")
-        await processing_msg.edit_text(f"Error: {str(e)[:100]}")
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    help_text = (
+        "📚 *HELP MENU*\n\n"
+        "🎰 *Games:* /slots, /dice, /coinflip, /roulette, /jackpot, /crash\n"
+        "💰 *Economy:* /balance, /daily, /top, /stats\n"
+        "🤖 *AI:* /ask, /new, /history\n"
+        "👑 *Admin:* /give, /reset, /broadcast, /addcoins, /admin"
+    )
+    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = update.message.text
+    user_id = update.effective_user.id
+    
+    if text == "🎰 Slots":
+        await update.message.reply_text("Enter bet amount: /slots [amount]")
+    elif text == "🎲 Dice":
+        await update.message.reply_text("Enter bet and guess: /dice [bet] [1-6]")
+    elif text == "🪙 Coin Flip":
+        await update.message.reply_text("Enter bet and choice: /coinflip [bet] [heads/tails]")
+    elif text == "🎡 Roulette":
+        await update.message.reply_text("Enter: /roulette [bet] [number/color/evenodd] [value]")
+    elif text == "💰 Balance":
+        await balance_command(update, context)
+    elif text == "🏆 Top Players":
+        await top_command(update, context)
+    elif text == "🤖 AI Chat":
+        await update.message.reply_text("Send me a message and I'll respond with AI!")
+    elif text == "❓ Help":
+        await help_command(update, context)
+    else:
+        processing_msg = await update.message.reply_text("🤔 *Thinking...*", parse_mode=ParseMode.MARKDOWN)
+        
+        try:
+            response, image_urls = await opera_api.send_message(user_id, text)
+            
+            if image_urls:
+                for url in image_urls[:5]:
+                    try:
+                        await update.message.reply_photo(url)
+                    except:
+                        pass
+            
+            if response:
+                await processing_msg.edit_text(response, parse_mode=ParseMode.MARKDOWN)
+            else:
+                await processing_msg.edit_text("❌ No response received. Please try again.")
+        
+        except Exception as e:
+            logger.error(f"Error processing message: {e}")
+            await processing_msg.edit_text(f"❌ Error: {str(e)[:100]}")
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     caption = update.message.caption or "What's in this image?"
     
@@ -1077,21 +1119,28 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await photo_file.download_to_memory(image_bytes)
         image_data = image_bytes.getvalue()
         
-        response = await opera_api.send_message(user_id, caption, image_data)
+        response, image_urls = await opera_api.send_message(user_id, caption, image_data)
+        
+        if image_urls:
+            for url in image_urls[:5]:
+                try:
+                    await update.message.reply_photo(url)
+                except:
+                    pass
         
         if response:
             await processing_msg.edit_text(response, parse_mode=ParseMode.MARKDOWN)
         else:
-            await processing_msg.edit_text("No analysis received. Please try again.")
+            await processing_msg.edit_text("❌ No analysis received. Please try again.")
     
     except Exception as e:
         logger.error(f"Error processing image: {e}")
-        await processing_msg.edit_text(f"Error analyzing image: {str(e)[:100]}")
+        await processing_msg.edit_text(f"❌ Error analyzing image: {str(e)[:100]}")
 
 @admin_only
-async def give_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def give_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /give [user_id] [amount]")
+        await update.message.reply_text("❌ Usage: /give [user_id] [amount]")
         return
     
     try:
@@ -1099,36 +1148,36 @@ async def give_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = int(context.args[1])
         
         if not db.get_user(target_id):
-            await update.message.reply_text("User not found!")
+            await update.message.reply_text("❌ User not found!")
             return
         
         db.admin_give_coins(target_id, amount)
         await update.message.reply_text(f"✅ Gave {amount} coins to user {target_id}")
     except ValueError:
-        await update.message.reply_text("Invalid user ID or amount!")
+        await update.message.reply_text("❌ Invalid user ID or amount!")
 
 @admin_only
-async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.message.reply_text("Usage: /reset [user_id]")
+        await update.message.reply_text("❌ Usage: /reset [user_id]")
         return
     
     try:
         target_id = int(context.args[0])
         
         if not db.get_user(target_id):
-            await update.message.reply_text("User not found!")
+            await update.message.reply_text("❌ User not found!")
             return
         
         db.admin_reset_user(target_id)
         await update.message.reply_text(f"✅ Reset user {target_id}'s stats to default")
     except ValueError:
-        await update.message.reply_text("Invalid user ID!")
+        await update.message.reply_text("❌ Invalid user ID!")
 
 @admin_only
-async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.message.reply_text("Usage: /broadcast [message]")
+        await update.message.reply_text("❌ Usage: /broadcast [message]")
         return
     
     message = ' '.join(context.args)
@@ -1148,9 +1197,9 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Broadcast sent!\nSuccess: {success}\nFailed: {failed}")
 
 @admin_only
-async def addcoins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def addcoins_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.message.reply_text("Usage: /addcoins [amount]")
+        await update.message.reply_text("❌ Usage: /addcoins [amount]")
         return
     
     try:
@@ -1162,10 +1211,10 @@ async def addcoins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(f"✅ Added {amount} coins to {len(users)} users!")
     except ValueError:
-        await update.message.reply_text("Invalid amount!")
+        await update.message.reply_text("❌ Invalid amount!")
 
 @admin_only
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     total_users = db.get_total_users()
     jackpot = db.get_jackpot()
     
@@ -1189,9 +1238,9 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
+    await safe_callback_answer(query)
     
     user_id = update.effective_user.id
     data = query.data
@@ -1201,7 +1250,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message, net_change, won = await gambling.slots(user_id, bet)
         keyboard = [[InlineKeyboardButton("🎰 Play Again", callback_data=f'slots_{bet}')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(message, reply_markup=reply_markup)
+        try:
+            await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+        except BadRequest:
+            await query.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     
     elif data.startswith('dice_'):
         bet = int(data.split('_')[1])
@@ -1224,7 +1276,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message, net_change, won = await gambling.coinflip(user_id, bet, choice)
         keyboard = [[InlineKeyboardButton("🪙 Flip Again", callback_data=f'coinflip_{bet}')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(message, reply_markup=reply_markup)
+        try:
+            await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+        except BadRequest:
+            await query.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     
     elif data.startswith('roulette_'):
         bet = int(data.split('_')[1])
@@ -1250,9 +1305,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not won:
             keyboard = [[InlineKeyboardButton("🎰 Spin for Jackpot!", callback_data=f'jackpot_{bet}')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(message, reply_markup=reply_markup)
+            try:
+                await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+            except BadRequest:
+                await query.message.reply_text(message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
         else:
-            await query.edit_message_text(message)
+            try:
+                await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN)
+            except BadRequest:
+                await query.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
     
     elif data == 'crash_cashout':
         if user_id in active_crash_games:
@@ -1268,54 +1329,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 db.update_stats(user_id, True, game_data["bet"], win_amount)
                 db.add_game_history(user_id, "crash", game_data["bet"], "win", win_amount)
                 
-                message = f"📈 CRASH: Crashed at {crash_point:.2f}x\n✅ Cashed out at {multiplier:.2f}x!\n🎉 You won {win_amount} coins!"
+                message = f"📈 *CRASH:* Crashed at {crash_point:.2f}x\n✅ Cashed out at {multiplier:.2f}x!\n🎉 You won {win_amount} coins!"
             else:
                 db.update_balance(user_id, -game_data["bet"])
                 db.update_stats(user_id, False, game_data["bet"], 0)
                 db.add_game_history(user_id, "crash", game_data["bet"], "lose", 0)
                 
-                message = f"📈 CRASH: Crashed at {crash_point:.2f}x\n💥 Too late! You lost {game_data['bet']} coins!"
+                message = f"📈 *CRASH:* Crashed at {crash_point:.2f}x\n💥 Too late! You lost {game_data['bet']} coins!"
             
             del active_crash_games[user_id]
-            await query.edit_message_text(message)
-    
-    elif data == 'check_balance':
-        user = db.get_user(user_id)
-        if user:
-            stats = db.get_user_stats(user_id)
-            await query.edit_message_text(
-                f"💰 *Your Balance*\n\n"
-                f"💵 Balance: {user[4]} coins\n"
-                f"📊 Total Won: {stats['total_won']} coins\n"
-                f"📉 Total Lost: {stats['total_lost']} coins\n"
-                f"🎮 Games Played: {stats['games_played']}",
-                parse_mode=ParseMode.MARKDOWN
-            )
-    
-    elif data == 'top_players':
-        top_users = db.get_top_users(5)
-        message = "🏆 *TOP 5 PLAYERS* 🏆\n\n"
-        for i, user in enumerate(top_users, 1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-            name = user[2] if user[2] else f"@{user[1]}" if user[1] else f"User {user[0]}"
-            message += f"{medal} {name}: {user[3]} coins\n"
-        
-        await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN)
-    
-    elif data == 'chat_ai':
-        await query.edit_message_text("💬 Send me a message and I'll respond with AI!\nUse /new to start fresh conversation.")
-    
-    elif data == 'game_slots':
-        await query.edit_message_text("🎰 Enter your bet amount:\nUsage: /slots [bet]")
-    
-    elif data == 'game_dice':
-        await query.edit_message_text("🎲 Enter your bet and guess:\nUsage: /dice [bet] [1-6]")
-    
-    elif data == 'game_coinflip':
-        await query.edit_message_text("🪙 Enter your bet and choice:\nUsage: /coinflip [bet] [heads/tails]")
-    
-    elif data == 'game_roulette':
-        await query.edit_message_text("🎡 Enter your bet, type, and value:\nUsage: /roulette [bet] [number/color/evenodd] [value]")
+            try:
+                await query.edit_message_text(message, parse_mode=ParseMode.MARKDOWN)
+            except BadRequest:
+                await query.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
     
     elif data == 'admin_users':
         if not await check_admin(user_id, update.effective_user.username):
@@ -1338,7 +1364,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.reset_jackpot()
         await query.edit_message_text("✅ Jackpot reset to 10000 coins!")
 
-async def main():
+async def main() -> None:
     print("\n" + "="*60)
     print("🎮 TELEGRAM CASINO BOT WITH OPERA AI 🎮")
     print("="*60 + "\n")
@@ -1361,6 +1387,7 @@ async def main():
     print(f"👑 Admin: @{ADMIN_USERNAME}")
     
     application = Application.builder().token(bot_token).build()
+    application.add_error_handler(error_handler)
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("ask", ask_ai))
@@ -1378,6 +1405,7 @@ async def main():
     application.add_handler(CommandHandler("users", users_command))
     application.add_handler(CommandHandler("new", new_chat))
     application.add_handler(CommandHandler("history", show_history))
+    application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("give", give_command))
     application.add_handler(CommandHandler("reset", reset_command))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
@@ -1396,7 +1424,7 @@ async def main():
         
         stop_event = asyncio.Event()
         
-        def signal_handler():
+        def signal_handler() -> None:
             stop_event.set()
         
         loop = asyncio.get_running_loop()
